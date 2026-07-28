@@ -54,29 +54,6 @@ func scanner(db *sql.DB) {
 			save()
 			break
 		}
-		if row == ":ls" {
-			rows, _ := db.Query("SELECT id, content, created_at FROM notes ORDER BY created_at DESC")
-			defer rows.Close()
-			for rows.Next() {
-				var id int
-				var content, createAt string
-				rows.Scan(&id, &content, &createAt)
-				fmt.Printf("[%d] %s\n%s\n------------\n", id, createAt, content)
-			}
-			continue
-		}
-		if strings.HasPrefix(row, ":find ") {
-			keyword := strings.TrimPrefix(row, ":find ")
-			rows, _ := db.Query("SELECT id, content, created_at FROM notes WHERE content LIKE ?", "%"+keyword+"%")
-			defer rows.Close()
-			for rows.Next() {
-				var id int
-				var content, createAt string
-				rows.Scan(&id, &content, &createAt)
-				fmt.Printf("------------\n[%d] %s\n%s\n------------\n", id, createAt, content)
-			}
-			continue
-		}
 		
 		buffer = append(buffer, row)
 	}
@@ -86,7 +63,40 @@ func scanner(db *sql.DB) {
 	}
 }
 
+func runCommand(db *sql.DB, command string) {
+	if command == ":ls" {
+		rows, _ := db.Query("SELECT id, content, created_at FROM notes ORDER BY created_at DESC")
+		defer rows.Close()
+		for rows.Next() {
+			var id int
+			var content, createAt string
+			rows.Scan(&id, &content, &createAt)
+			fmt.Printf("[%d] %s\n%s\n------------\n", id, createAt, content)
+		}
+	}
+	if strings.HasPrefix(command, ":find ") {
+		keyword := strings.TrimPrefix(command, ":find ")
+		rows, _ := db.Query("SELECT id, content, created_at FROM notes WHERE content LIKE ?", "%"+keyword+"%")
+		defer rows.Close()
+		for rows.Next() {
+			var id int
+			var content, createAt string
+			rows.Scan(&id, &content, &createAt)
+			fmt.Printf("------------\n[%d] %s\n%s\n------------\n", id, createAt, content)
+		}
+	}
+}
+
 func main() {
 	db := initDB()
+
+	if len(os.Args) > 1 {
+		// there is an extra argument, e.g. ":ls" or ":find egg"
+		command := strings.Join(os.Args[1:], " ")
+		runCommand(db, command)
+		return
+	}
+
+	// no extra arguments -> normal note-taking mode
 	scanner(db)
 }
