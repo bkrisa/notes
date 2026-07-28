@@ -2,9 +2,10 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"fmt"
 	"os"
-	"database/sql"
+	"strconv"
 	"strings"
 	_ "modernc.org/sqlite"
 )
@@ -83,6 +84,57 @@ func runCommand(db *sql.DB, command string) {
 			var content, createAt string
 			rows.Scan(&id, &content, &createAt)
 			fmt.Printf("------------\n[%d] %s\n%s\n------------\n", id, createAt, content)
+		}
+	}
+	if strings.HasPrefix(command, ":edit ") {
+		idStr := strings.TrimPrefix(command, ":edit ")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			fmt.Println("Invalid: ID:", idStr)
+			return
+		}
+
+		noteRow := db.QueryRow("SELECT id, content, created_at FROM notes WHERE id = ?", id)
+		var content, createAt string
+		err = noteRow.Scan(&id, &content, &createAt)
+		if err != nil {
+			fmt.Println("No such note:", id)
+			return
+		}
+		fmt.Printf("[%d] %s\n", id, createAt)
+
+		editScanner := bufio.NewScanner(os.Stdin)
+		buffer := strings.Split(content, "\n")
+
+		for _, line := range buffer {
+			fmt.Println(line)
+		}
+
+		save := func() {
+			newContent := strings.Join(buffer, "\n")
+			db.Exec("UPDATE notes SET content = ? WHERE id = ?", newContent, id)
+			buffer = nil
+			fmt.Println("--- Update note ---")
+		}
+		
+		for {
+			fmt.Print("note> ")
+			editScanner.Scan()
+			row := editScanner.Text()
+		
+			if row == ":q" {
+				break
+			}
+			if row == ":w" {
+				save()
+				continue
+			}
+			if row == ":wq" {
+				save()
+				break
+			}
+			
+			buffer = append(buffer, row)
 		}
 	}
 }
