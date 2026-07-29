@@ -111,7 +111,7 @@ func runCommand(db *sql.DB, command string) {
 
 		oldLines := strings.Split(content, "\n")
 		editScanner := bufio.NewScanner(os.Stdin)
-		 var newBuffer []string
+		var newBuffer []string
 
 		fmt.Println("--- Edit note (Enter = remains, or rewrite the line) ---")
 		for _, oldLine := range oldLines {
@@ -152,6 +152,27 @@ func runCommand(db *sql.DB, command string) {
 			}
 			
 			newBuffer = append(newBuffer, row)
+		}
+	}
+	if strings.HasPrefix(command, ":d ") {
+		idStr := strings.TrimPrefix(command, ":d ")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			fmt.Println("Invalid: ID:", idStr)
+			return
+		}
+
+		result, err := db.Exec("DELETE FROM notes WHERE id = ?", id)
+		if err != nil {
+			fmt.Println("Delete error:", err)
+			return
+		}
+
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			fmt.Printf("No such note: %d\n", id)
+		} else {
+			fmt.Printf("--- Deleted note [%d] ---\n", id)
 		}
 	}
 }
