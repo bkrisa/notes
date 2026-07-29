@@ -83,13 +83,31 @@ func runCommand(db *sql.DB, command string) {
 	}
 	if strings.HasPrefix(command, ":find ") {
 		keyword := strings.TrimPrefix(command, ":find ")
-		rows, _ := db.Query("SELECT id, content, created_at FROM notes WHERE content LIKE ?", "%"+keyword+"%")
+
+		id, err := strconv.Atoi(keyword)
+		if err != nil {
+			id = -1
+		}
+
+		rows, _ := db.Query("SELECT * FROM notes WHERE id = ? OR content LIKE ?", id, "%"+keyword+"%")
 		defer rows.Close()
 		for rows.Next() {
-			var id int
+			var rowId int
 			var content, createAt string
-			rows.Scan(&id, &content, &createAt)
-			fmt.Printf("------------\n[%d] %s\n%s\n------------\n", id, createAt, content)
+			rows.Scan(&rowId, &content, &createAt)
+			fmt.Printf("------------\n[%d] %s\n%s\n------------\n", rowId, createAt, content)
+		}
+	}
+	if strings.HasPrefix(command, ":date ") {
+		dateQuery := strings.TrimPrefix(command, ":date ")
+
+		rows, _ := db.Query("SELECT * FROM notes WHERE created_at LIKE ?", "%"+dateQuery+"%")
+		defer rows.Close()
+		for rows.Next() {
+			var rowId int
+			var content, createAt string
+			rows.Scan(&rowId, &content, &createAt)
+			fmt.Printf("------------\n[%d] %s\n%s\n------------\n", rowId, createAt, content)
 		}
 	}
 	if strings.HasPrefix(command, ":edit ") {
