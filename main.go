@@ -44,6 +44,12 @@ func scanner(db *sql.DB) {
 		scanner.Scan()
 		row := scanner.Text()
 	
+		if row == ":u" {
+			if len(buffer) > 0 {
+				buffer = buffer[:len(buffer)-1]
+				fmt.Println("Last line deleted.")
+			}
+		}
 		if row == ":q" {
 			break
 		}
@@ -103,18 +109,29 @@ func runCommand(db *sql.DB, command string) {
 		}
 		fmt.Printf("[%d] %s\n", id, createAt)
 
+		oldLines := strings.Split(content, "\n")
 		editScanner := bufio.NewScanner(os.Stdin)
-		buffer := strings.Split(content, "\n")
+		 var newBuffer []string
 
-		for _, line := range buffer {
-			fmt.Println(line)
+		fmt.Println("--- Edit note (Enter = remains, or rewrite the line) ---")
+		for _, oldLine := range oldLines {
+			fmt.Printf("(%s) > ", oldLine)
+			editScanner.Scan()
+			input := editScanner.Text()
+
+			if input == "" {
+				newBuffer = append(newBuffer, oldLine)
+				continue
+			} else {
+				newBuffer = append(newBuffer, input)
+			}
 		}
 
 		save := func() {
-			newContent := strings.Join(buffer, "\n")
+			newContent := strings.Join(newBuffer, "\n")
 			db.Exec("UPDATE notes SET content = ? WHERE id = ?", newContent, id)
-			buffer = nil
-			fmt.Println("--- Update note ---")
+			newBuffer = nil
+			fmt.Println("--- Note updated ---")
 		}
 		
 		for {
@@ -134,7 +151,7 @@ func runCommand(db *sql.DB, command string) {
 				break
 			}
 			
-			buffer = append(buffer, row)
+			newBuffer = append(newBuffer, row)
 		}
 	}
 }
