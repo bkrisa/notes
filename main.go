@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -31,19 +33,19 @@ func scanner(db *sql.DB) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	var buffer []string
-	
+
 	save := func() {
 		content := strings.Join(buffer, "\n")
 		db.Exec("INSERT INTO notes (content) VALUES (?)", content)
 		buffer = nil
 		fmt.Println("--- Save note ---")
 	}
-	
+
 	for {
 		fmt.Print("note> ")
 		scanner.Scan()
 		row := scanner.Text()
-	
+
 		if row == ":u" {
 			if len(buffer) > 0 {
 				buffer = buffer[:len(buffer)-1]
@@ -61,7 +63,7 @@ func scanner(db *sql.DB) {
 			save()
 			break
 		}
-		
+
 		buffer = append(buffer, row)
 	}
 
@@ -151,12 +153,12 @@ func runCommand(db *sql.DB, command string) {
 			newBuffer = nil
 			fmt.Println("--- Note updated ---")
 		}
-		
+
 		for {
 			fmt.Print("note> ")
 			editScanner.Scan()
 			row := editScanner.Text()
-		
+
 			if row == ":q" {
 				break
 			}
@@ -168,7 +170,7 @@ func runCommand(db *sql.DB, command string) {
 				save()
 				break
 			}
-			
+
 			newBuffer = append(newBuffer, row)
 		}
 	}
@@ -195,16 +197,32 @@ func runCommand(db *sql.DB, command string) {
 	}
 }
 
-func main() {
-	db := initDB()
+func runServer() {
+	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "pong")
+	})
 
+	fmt.Println("Server listening on :8080")
+	err := http.ListenAndServe(":8080", nil)
+	if err != nil {
+		fmt.Println("Server error:", err)
+	}
+}
+
+func main() {
+	// run server
+	if len(os.Args) > 1 && os.Args[1] == "--server" {
+		runServer()
+		return
+	}
+
+	db := initDB()
 	if len(os.Args) > 1 {
 		// there is an extra argument, e.g. ":ls" or ":find egg"
 		command := strings.Join(os.Args[1:], " ")
 		runCommand(db, command)
 		return
 	}
-
 	// no extra arguments -> normal note-taking mode
 	scanner(db)
 }
