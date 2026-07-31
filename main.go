@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -36,9 +37,26 @@ func scanner(db *sql.DB) {
 
 	save := func() {
 		content := strings.Join(buffer, "\n")
-		db.Exec("INSERT INTO notes (content) VALUES (?)", content)
+		result, err := db.Exec("INSERT INTO notes (content) VALUES (?)", content)
+		if err != nil {
+			fmt.Println("Save error:", err)
+			return
+		}
+		id, _ := result.LastInsertId()
 		buffer = nil
 		fmt.Println("--- Save note ---")
+
+		serverURL := os.Getenv("QNOTE_SERVER")
+		if serverURL != "" {
+			row := db.QueryRow("SELECT created_at FROM notes WHERE id = ?", id)
+			var createAt string
+			row.Scan(&createAt)
+
+			err := uploadNote(serverURL, int(id), content, createAt)
+			if err != nil {
+				// no internet or server unavailable - we move on silently
+			}
+		}
 	}
 
 	for {
@@ -195,14 +213,6 @@ func runCommand(db *sql.DB, command string) {
 			fmt.Printf("--- Deleted note [%d] ---\n", id)
 		}
 	}
-	if command == ":sync" {
-		serverURL := os.Getenv("QNOTE_SERVER")
-		if serverURL == "" {
-			fmt.Println("Set the QNOTE_SERVER environment variable first, e.g. export QNOTE_SERVER=http://100.x.x.x:8080")
-			return
-		}
-		syncFromServer(db, serverURL)
-	}
 }
 
 func runServer(db *sql.DB) {
@@ -234,6 +244,37 @@ func runServer(db *sql.DB) {
 		json.NewEncoder(w).Encode(notes)
 	})
 
+	http.HandleFunc("/notes/upload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		
+		type Note struct {
+			ID int `json:"id"`
+			Content string `json:"content"`
+			CreateAt string `json:"created_at"`
+		}
+
+		var n Note
+		err := json.NewDecoder(r.Body).Decode(&n)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		_, err = db.Exec(`
+			INSERT INTO notes (id, content, created_at) VALUES (?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET content = excluded.content
+		`, n.ID, n.Content, n.CreateAt)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		fmt.Fprintln(w, "OK")
+	})
+
 	fmt.Println("Server listening on :8080")
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
@@ -244,7 +285,6 @@ func runServer(db *sql.DB) {
 func syncFromServer(db *sql.DB, serverURL string) {
 	resp, err := http.Get(serverURL + "/notes")
 	if err != nil {
-		fmt.Println("Sync error:", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -275,6 +315,25 @@ func syncFromServer(db *sql.DB, serverURL string) {
 	fmt.Printf("Synced %d notes.\n", len(notes))
 }
 
+func uploadNote(serverURL string, id int, content string, createAt string) error {
+	type Note struct {
+		ID int `json:"id"`
+		Content string `json:"content"`
+		CreateAt string `json:"created_at"`
+	}
+
+	n := Note{ID: id, Content: content, CreateAt: createAt}
+	body, _ := json.Marshal(n)
+
+	resp, err := http.Post(serverURL+"/notes/upload", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	return nil
+}
+
 func main() {
 	db := initDB()
 
@@ -282,6 +341,11 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--server" {
 		runServer(db)
 		return
+	}
+
+	serverURL := os.Getenv("QNOTE_SERVER")
+	if serverURL != "" {
+		syncFromServer(db, serverURL)
 	}
 
 	if len(os.Args) > 1 {
