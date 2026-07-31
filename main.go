@@ -195,6 +195,14 @@ func runCommand(db *sql.DB, command string) {
 			fmt.Printf("--- Deleted note [%d] ---\n", id)
 		}
 	}
+	if command == ":sync" {
+		serverURL := os.Getenv("QNOTE_SERVER")
+		if serverURL == "" {
+			fmt.Println("Set the QNOTE_SERVER environment variable first, e.g. export QNOTE_SERVER=http://100.x.x.x:8080")
+			return
+		}
+		syncFromServer(db, serverURL)
+	}
 }
 
 func runServer(db *sql.DB) {
@@ -231,6 +239,40 @@ func runServer(db *sql.DB) {
 	if err != nil {
 		fmt.Println("Server error:", err)
 	}
+}
+
+func syncFromServer(db *sql.DB, serverURL string) {
+	resp, err := http.Get(serverURL + "/notes")
+	if err != nil {
+		fmt.Println("Sync error:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	type Note struct {
+		ID int `json:"id"`
+		Content string `json:"content"`
+		CreateAt string `json:"created_at"`
+	}
+
+	var notes []Note
+	err = json.NewDecoder(resp.Body).Decode(&notes)
+	if err != nil {
+		fmt.Println("Decoder error:", err)
+		return
+	}
+
+	for _, n := range notes {
+		_, err := db.Exec(`
+			INSERT INTO notes (id, content, created_at) VALUES (?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET content = excluded.content
+		`, n.ID, n.Content, n.CreateAt)
+		if err != nil {
+			fmt.Println("Insert/update error:", err)
+		}
+	}
+
+	fmt.Printf("Synced %d notes.\n", len(notes))
 }
 
 func main() {
