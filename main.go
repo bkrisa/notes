@@ -3,12 +3,12 @@ package main
 import (
 	"bufio"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
-
 	_ "modernc.org/sqlite"
 )
 
@@ -197,9 +197,33 @@ func runCommand(db *sql.DB, command string) {
 	}
 }
 
-func runServer() {
+func runServer(db *sql.DB) {
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "pong")
+	})
+
+	http.HandleFunc("/notes", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.Query("SELECT id, content, created_at FROM notes ORDER BY created_at DESC")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		type Note struct {
+			ID int `json:"id"`
+			Content string `json:"content"`
+			CreateAt string `json:"created_at"`
+		}
+
+		var notes []Note
+		for rows.Next() {
+			var n Note
+			rows.Scan(&n.ID, &n.Content, &n.CreateAt)
+			notes = append(notes, n)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(notes)
 	})
 
 	fmt.Println("Server listening on :8080")
@@ -210,17 +234,17 @@ func runServer() {
 }
 
 func main() {
+	db := initDB()
+
 	// run server
 	if len(os.Args) > 1 && os.Args[1] == "--server" {
-		runServer()
+		runServer(db)
 		return
 	}
 
-	db := initDB()
 	if len(os.Args) > 1 {
 		// there is an extra argument, e.g. ":ls" or ":find egg"
-		command := strings.Join(os.Args[1:], " ")
-		runCommand(db, command)
+		runCommand(db, strings.Join(os.Args[1:], " "))
 		return
 	}
 	// no extra arguments -> normal note-taking mode
