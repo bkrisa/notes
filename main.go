@@ -170,6 +170,14 @@ func runCommand(db *sql.DB, command string) {
 			db.Exec("UPDATE notes SET content = ? WHERE id = ?", newContent, id)
 			newBuffer = nil
 			fmt.Println("--- Note updated ---")
+			
+			serverURL := os.Getenv("QNOTE_SERVER")
+			if serverURL != "" {
+				err := uploadNote(serverURL, id, newContent, createAt)
+				if err != nil {
+					// no internet or server unavailable - we move on silently
+				}
+			}
 		}
 
 		for {
@@ -211,6 +219,14 @@ func runCommand(db *sql.DB, command string) {
 			fmt.Printf("No such note: %d\n", id)
 		} else {
 			fmt.Printf("--- Deleted note [%d] ---\n", id)
+
+			serverURL := os.Getenv("QNOTE_SERVER")
+			if serverURL != "" {
+				err := deleteNoteOnServer(serverURL, id)
+				if err != nil {
+					// no internet or server unavailable - we move on silently
+				}
+			}
 		}
 	}
 }
@@ -275,6 +291,27 @@ func runServer(db *sql.DB) {
 		fmt.Fprintln(w, "OK")
 	})
 
+	http.HandleFunc("/notes/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		type DeleteRequest struct {
+			ID int `json:"id"`
+		}
+
+		var req DeleteRequest
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		db.Exec("DELETE FROM notes WHERE id = ?", req.ID)
+		fmt.Fprintln(w, "OK")
+	})
+
 	fmt.Println("Server listening on :8080")
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
@@ -326,6 +363,25 @@ func uploadNote(serverURL string, id int, content string, createAt string) error
 	body, _ := json.Marshal(n)
 
 	resp, err := http.Post(serverURL+"/notes/upload", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	fmt.Println("Uploaded note ID:", n.ID)
+	
+	return nil
+}
+
+func deleteNoteOnServer(serverURL string, id int) error {
+	type DeleteRequest struct {
+		ID int `json:"id"`
+	}
+
+	req := DeleteRequest{ID: id}
+	body, _ := json.Marshal(req)
+
+	resp, err := http.Post(serverURL+"/notes/delete", "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		return err
 	}
