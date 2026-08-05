@@ -6,11 +6,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	_ "modernc.org/sqlite"
+	"tailscale.com/client/local"
 )
 
 func initDB() *sql.DB {
@@ -170,7 +172,7 @@ func runCommand(db *sql.DB, command string) {
 			db.Exec("UPDATE notes SET content = ? WHERE id = ?", newContent, id)
 			newBuffer = nil
 			fmt.Println("--- Note updated ---")
-			
+
 			serverURL := os.Getenv("QNOTE_SERVER")
 			if serverURL != "" {
 				err := uploadNote(serverURL, id, newContent, createAt)
@@ -236,7 +238,7 @@ func runServer(db *sql.DB) {
 		fmt.Fprintln(w, "pong")
 	})
 
-	http.HandleFunc("/notes", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/notes", requireTailscale(func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query("SELECT id, content, created_at FROM notes ORDER BY created_at DESC")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -245,8 +247,8 @@ func runServer(db *sql.DB) {
 		defer rows.Close()
 
 		type Note struct {
-			ID int `json:"id"`
-			Content string `json:"content"`
+			ID       int    `json:"id"`
+			Content  string `json:"content"`
 			CreateAt string `json:"created_at"`
 		}
 
@@ -258,17 +260,17 @@ func runServer(db *sql.DB) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(notes)
-	})
+	}))
 
 	http.HandleFunc("/notes/upload", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		
+
 		type Note struct {
-			ID int `json:"id"`
-			Content string `json:"content"`
+			ID       int    `json:"id"`
+			Content  string `json:"content"`
 			CreateAt string `json:"created_at"`
 		}
 
@@ -327,8 +329,8 @@ func syncFromServer(db *sql.DB, serverURL string) {
 	defer resp.Body.Close()
 
 	type Note struct {
-		ID int `json:"id"`
-		Content string `json:"content"`
+		ID       int    `json:"id"`
+		Content  string `json:"content"`
 		CreateAt string `json:"created_at"`
 	}
 
@@ -354,8 +356,8 @@ func syncFromServer(db *sql.DB, serverURL string) {
 
 func uploadNote(serverURL string, id int, content string, createAt string) error {
 	type Note struct {
-		ID int `json:"id"`
-		Content string `json:"content"`
+		ID       int    `json:"id"`
+		Content  string `json:"content"`
 		CreateAt string `json:"created_at"`
 	}
 
@@ -369,7 +371,7 @@ func uploadNote(serverURL string, id int, content string, createAt string) error
 	defer resp.Body.Close()
 
 	fmt.Println("Uploaded note ID:", n.ID)
-	
+
 	return nil
 }
 
@@ -388,6 +390,32 @@ func deleteNoteOnServer(serverURL string, id int) error {
 	defer resp.Body.Close()
 
 	return nil
+}
+
+func requireTailscale(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+			return
+		}
+
+		ip :=net.ParseIP(host)
+		if ip == nil || ip.IsLoopback() {
+			http.Error(w, "Unauthorized: loopback not allowed", http.StatusForbidden)
+			return
+		}
+
+		var lc local.Client
+		who, err := lc.WhoIs(r.Context(), r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "Unauthorized: not a recognized Tailscale devide", http.StatusForbidden)
+			return
+		}
+
+		fmt.Println("Request from Tailscale device:", who.Node.Name)
+		next(w, r)
+	}
 }
 
 func main() {
