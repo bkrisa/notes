@@ -314,11 +314,13 @@ func runServer(db *sql.DB) {
 		fmt.Fprintln(w, "OK")
 	}))
 
-	fmt.Println("Server listening on :8080")
-	listenAddr := os.Getenv("QNOTE_SERVER")
+	listenAddr := os.Getenv("QNOTE_LISTEN")
 	if listenAddr == "" {
+		fmt.Println("QNOTE_LISTEN not set, defaulting to :8080 (all interfaced - not recommended for production)")
 		listenAddr = ":8080"
 	}
+
+	fmt.Println("Server listening on:", listenAddr)
 	err := http.ListenAndServe(listenAddr, nil)
 	if err != nil {
 		fmt.Println("Server error:", err)
