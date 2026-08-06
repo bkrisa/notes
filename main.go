@@ -262,7 +262,7 @@ func runServer(db *sql.DB) {
 		json.NewEncoder(w).Encode(notes)
 	}))
 
-	http.HandleFunc("/notes/upload", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/notes/upload", requireTailscale(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -291,9 +291,9 @@ func runServer(db *sql.DB) {
 		}
 
 		fmt.Fprintln(w, "OK")
-	})
+	}))
 
-	http.HandleFunc("/notes/delete", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/notes/delete", requireTailscale(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -312,10 +312,14 @@ func runServer(db *sql.DB) {
 
 		db.Exec("DELETE FROM notes WHERE id = ?", req.ID)
 		fmt.Fprintln(w, "OK")
-	})
+	}))
 
 	fmt.Println("Server listening on :8080")
-	err := http.ListenAndServe(":8080", nil)
+	listenAddr := os.Getenv("QNOTE_SERVER")
+	if listenAddr == "" {
+		listenAddr = ":8080"
+	}
+	err := http.ListenAndServe(listenAddr, nil)
 	if err != nil {
 		fmt.Println("Server error:", err)
 	}
@@ -409,7 +413,7 @@ func requireTailscale(next http.HandlerFunc) http.HandlerFunc {
 		var lc local.Client
 		who, err := lc.WhoIs(r.Context(), r.RemoteAddr)
 		if err != nil {
-			http.Error(w, "Unauthorized: not a recognized Tailscale devide", http.StatusForbidden)
+			http.Error(w, "Unauthorized: not a recognized Tailscale device", http.StatusForbidden)
 			return
 		}
 
