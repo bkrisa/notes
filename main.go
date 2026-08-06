@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
 	_ "modernc.org/sqlite"
 	"tailscale.com/client/local"
 )
@@ -27,7 +28,10 @@ func initDB() *sql.DB {
 		content TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
-	db.Exec(createTable)
+	_, err = db.Exec(createTable)
+	if err != nil {
+		fmt.Println("Create table error:", err)
+	}
 
 	return db
 }
@@ -52,11 +56,14 @@ func scanner(db *sql.DB) {
 		if serverURL != "" {
 			row := db.QueryRow("SELECT created_at FROM notes WHERE id = ?", id)
 			var createAt string
-			row.Scan(&createAt)
+			if err := row.Scan(&createAt); err != nil {
+				fmt.Println("Scan error:", err)
+				return
+			}
 
 			err := uploadNote(serverURL, int(id), content, createAt)
 			if err != nil {
-				// no internet or server unavailable - we move on silently
+				_ = err // no internet or server unavailable - we move on silently
 			}
 		}
 	}
@@ -94,12 +101,23 @@ func scanner(db *sql.DB) {
 
 func runCommand(db *sql.DB, command string) {
 	if command == ":ls" {
-		rows, _ := db.Query("SELECT id, content, created_at FROM notes ORDER BY created_at DESC")
-		defer rows.Close()
+		rows, err := db.Query("SELECT id, content, created_at FROM notes ORDER BY created_at DESC")
+		if err != nil {
+			fmt.Println("Query error:", err)
+			return
+		}
+		defer func() {
+			if err := rows.Close(); err != nil {
+				fmt.Println("Close error", err)
+			}
+		}()
 		for rows.Next() {
 			var id int
 			var content, createAt string
-			rows.Scan(&id, &content, &createAt)
+			if err := rows.Scan(&id, &content, &createAt); err != nil {
+				fmt.Println("Scan error:", err)
+				continue
+			}
 			fmt.Printf("[%d] %s\n%s\n------------\n", id, createAt, content)
 		}
 	}
@@ -111,24 +129,46 @@ func runCommand(db *sql.DB, command string) {
 			id = -1
 		}
 
-		rows, _ := db.Query("SELECT * FROM notes WHERE id = ? OR content LIKE ?", id, "%"+keyword+"%")
-		defer rows.Close()
+		rows, err := db.Query("SELECT * FROM notes WHERE id = ? OR content LIKE ?", id, "%"+keyword+"%")
+		if err != nil {
+			fmt.Println("Query error:", err)
+			return
+		}
+		defer func() {
+			if err := rows.Close(); err != nil {
+				fmt.Println("Close error:", err)
+			}
+		}()
 		for rows.Next() {
 			var rowId int
 			var content, createAt string
-			rows.Scan(&rowId, &content, &createAt)
+			if err := rows.Scan(&rowId, &content, &createAt); err != nil {
+				fmt.Println("Scan error:", err)
+				continue
+			}
 			fmt.Printf("------------\n[%d] %s\n%s\n------------\n", rowId, createAt, content)
 		}
 	}
 	if strings.HasPrefix(command, ":date ") {
 		dateQuery := strings.TrimPrefix(command, ":date ")
 
-		rows, _ := db.Query("SELECT * FROM notes WHERE created_at LIKE ?", "%"+dateQuery+"%")
-		defer rows.Close()
+		rows, err := db.Query("SELECT * FROM notes WHERE created_at LIKE ?", "%"+dateQuery+"%")
+		if err != nil {
+			fmt.Println("Query error:", err)
+			return
+		}
+		defer func() {
+			if err := rows.Close(); err != nil {
+				fmt.Println("Close error:", err)
+			}
+		}()
 		for rows.Next() {
 			var rowId int
 			var content, createAt string
-			rows.Scan(&rowId, &content, &createAt)
+			if err := rows.Scan(&rowId, &content, &createAt); err != nil {
+				fmt.Println("Scan error:", err)
+				continue
+			}
 			fmt.Printf("------------\n[%d] %s\n%s\n------------\n", rowId, createAt, content)
 		}
 	}
@@ -169,7 +209,11 @@ func runCommand(db *sql.DB, command string) {
 
 		save := func() {
 			newContent := strings.Join(newBuffer, "\n")
-			db.Exec("UPDATE notes SET content = ? WHERE id = ?", newContent, id)
+			_, err := db.Exec("UPDATE notes SET content = ? WHERE id = ?", newContent, id)
+			if err != nil {
+				fmt.Println("Update error:", err)
+				return
+			}
 			newBuffer = nil
 			fmt.Println("--- Note updated ---")
 
@@ -177,7 +221,7 @@ func runCommand(db *sql.DB, command string) {
 			if serverURL != "" {
 				err := uploadNote(serverURL, id, newContent, createAt)
 				if err != nil {
-					// no internet or server unavailable - we move on silently
+					_ = err // no internet or server unavailable - we move on silently
 				}
 			}
 		}
@@ -226,7 +270,7 @@ func runCommand(db *sql.DB, command string) {
 			if serverURL != "" {
 				err := deleteNoteOnServer(serverURL, id)
 				if err != nil {
-					// no internet or server unavailable - we move on silently
+					_ = err // no internet or server unavailable - we move on silently
 				}
 			}
 		}
@@ -235,7 +279,9 @@ func runCommand(db *sql.DB, command string) {
 
 func runServer(db *sql.DB) {
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "pong")
+		if _, err := fmt.Fprintln(w, "pong"); err != nil {
+			fmt.Println("Write error:", err)
+		}
 	})
 
 	http.HandleFunc("/notes", requireTailscale(func(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +290,11 @@ func runServer(db *sql.DB) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer rows.Close()
+		defer func() {
+			if err := rows.Close(); err != nil {
+				fmt.Println("Close error:", err)
+			}
+		}()
 
 		type Note struct {
 			ID       int    `json:"id"`
@@ -255,11 +305,16 @@ func runServer(db *sql.DB) {
 		var notes []Note
 		for rows.Next() {
 			var n Note
-			rows.Scan(&n.ID, &n.Content, &n.CreateAt)
+			if err := rows.Scan(&n.ID, &n.Content, &n.CreateAt); err != nil {
+				fmt.Println("Scan error:", err)
+				continue
+			}
 			notes = append(notes, n)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(notes)
+		if err := json.NewEncoder(w).Encode(notes); err != nil {
+			fmt.Println("Encode error:", err)
+		}
 	}))
 
 	http.HandleFunc("/notes/upload", requireTailscale(func(w http.ResponseWriter, r *http.Request) {
@@ -290,7 +345,9 @@ func runServer(db *sql.DB) {
 			return
 		}
 
-		fmt.Fprintln(w, "OK")
+		if _, err := fmt.Fprintln(w, "OK"); err != nil {
+			fmt.Println("Write error:", err)
+		}
 	}))
 
 	http.HandleFunc("/notes/delete", requireTailscale(func(w http.ResponseWriter, r *http.Request) {
@@ -310,8 +367,13 @@ func runServer(db *sql.DB) {
 			return
 		}
 
-		db.Exec("DELETE FROM notes WHERE id = ?", req.ID)
-		fmt.Fprintln(w, "OK")
+		if _, err := db.Exec("DELETE FROM notes WHERE id = ?", req.ID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := fmt.Fprintln(w, "OK"); err != nil {
+			fmt.Println("Close errot:", err)
+		}
 	}))
 
 	listenAddr := os.Getenv("QNOTE_LISTEN")
@@ -332,7 +394,11 @@ func syncFromServer(db *sql.DB, serverURL string) {
 	if err != nil {
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Println("Close error:", err)
+		}
+	}()
 
 	type Note struct {
 		ID       int    `json:"id"`
@@ -374,7 +440,11 @@ func uploadNote(serverURL string, id int, content string, createAt string) error
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Println("Close error:", err)
+		}
+	}()
 
 	fmt.Println("Uploaded note ID:", n.ID)
 
@@ -393,7 +463,11 @@ func deleteNoteOnServer(serverURL string, id int) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Println("Close error:", err)
+		}
+	}()
 
 	return nil
 }
@@ -406,7 +480,7 @@ func requireTailscale(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		ip :=net.ParseIP(host)
+		ip := net.ParseIP(host)
 		if ip == nil || ip.IsLoopback() {
 			http.Error(w, "Unauthorized: loopback not allowed", http.StatusForbidden)
 			return
